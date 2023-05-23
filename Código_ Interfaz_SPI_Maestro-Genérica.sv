@@ -1,7 +1,7 @@
 `timescale 1ns / 1ps
 //////////////////////////////////////////////////////////////////////////////////
 //MODULO REGITRO DE CONTROL
-module  control_register(
+module control_register (
   input wire clk,
   input wire reset,
   input wire send,
@@ -13,26 +13,33 @@ module  control_register(
   output reg [7:0] n_rx_end
 );
 
+  reg [7:0] data_reg [0:255]; // Registro de datos de 8 bits, se asume N=8 (256 registros)
+
   always @(posedge clk or posedge reset) begin
     if (reset) begin
-      data_out <= 0;
-      cs_ctrl <= 0;
-      n_tx_end <= 0;
-      n_rx_end <= 0;
+      data_out <= 8'h00;
+      cs_ctrl <= 1'b0;
+      n_tx_end <= 8'h00;
+      n_rx_end <= 8'h00;
     end else begin
       if (send) begin
-        data_out <= data_in[addr_in];
-        cs_ctrl <= 1;
+        data_out <= data_reg[addr_in];
+        cs_ctrl <= 1'b1;
         n_tx_end <= n_tx_end + 1;
+        n_rx_end <= n_rx_end + 1;
+
+        if (n_tx_end == 8'hFF) begin
+          n_tx_end <= 8'h00;
+        end
       end else begin
-        cs_ctrl <= 0;
+        cs_ctrl <= 1'b0;
       end
-      if (n_tx_end == 8) begin
-        n_tx_end <= 0;
-      end
-      if (n_rx_end == 8) begin
-        n_rx_end <= 0;
-      end
+    end
+  end
+
+  always @(posedge clk) begin
+    if (send) begin
+      data_reg[addr_in] <= data_in;
     end
   end
 
@@ -222,3 +229,4 @@ module spi_error_detection (
   assign error = error_flag;
 
 endmodule
+
