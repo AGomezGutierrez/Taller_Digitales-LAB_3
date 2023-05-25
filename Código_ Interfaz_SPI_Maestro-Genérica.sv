@@ -229,4 +229,3 @@ module spi_error_detection (
   assign error = error_flag;
 
 endmodule
-
