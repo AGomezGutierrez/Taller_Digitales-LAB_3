@@ -1,231 +1,131 @@
 `timescale 1ns / 1ps
-//////////////////////////////////////////////////////////////////////////////////
-//MODULO REGITRO DE CONTROL
-module control_register (
-  input wire clk,
-  input wire reset,
-  input wire send,
-  input wire [7:0] addr_in,
-  input wire [7:0] data_in,
-  output reg [7:0] data_out,
-  output reg cs_ctrl,
-  output reg [7:0] n_tx_end,
-  output reg [7:0] n_rx_end
+
+
+
+// Módulo Registro_de_Datos
+//Definicin de N=3 por defecto
+module Registro_de_Datos #(parameter N = 3)(
+  input wire reg_sel_i,//Señal de selección del Registro
+  input wire [N-1:0] addr_in,//Dirección de entrada para acceder a un registro en la matriz.
+  input wire [7:0] dato_in,//Dato de entrada para ser almacenado en el registro seleccionado
+  output wire [7:0] datos_registros,//Datos almacenados en el registro seleccionado.
+  input wire scl,//Señal de reloj de sistema.
+  input wire ss,//Selcciona el esclavo en el módulo de control.
+  input wire miso,//Señal de entrada del maestro al esclavo (Master In, Slave Out).
+  output wire mosi//Señal de salida del maestro al esclavo (Master Out, Slave In).
 );
 
-  reg [7:0] data_reg [0:255]; // Registro de datos de 8 bits, se asume N=8 (256 registros)
-
-  always @(posedge clk or posedge reset) begin
-    if (reset) begin
-      data_out <= 8'h00;
-      cs_ctrl <= 1'b0;
-      n_tx_end <= 8'h00;
-      n_rx_end <= 8'h00;
-    end else begin
-      if (send) begin
-        data_out <= data_reg[addr_in];
-        cs_ctrl <= 1'b1;
-        n_tx_end <= n_tx_end + 1;
-        n_rx_end <= n_rx_end + 1;
-
-        if (n_tx_end == 8'hFF) begin
-          n_tx_end <= 8'h00;
-        end
-      end else begin
-        cs_ctrl <= 1'b0;
-      end
-    end
+//Matriz de registros con longitud 2**N, cada registro en la matriz representa un dato almacenado en el campo DATO correspondiente.
+  reg [7:0] registros [0:2**N-1];
+// bloque "always" sensibilizado por el flanco de subida de "scl":
+//Comprueba si la dirección de entrada "addr_in" está dentro del rango válido (0 a 2^N-1).
+//Si la dirección es válida, asigna el dato de entrada "dato_in" al registro correspondiente en la matriz.
+  always @(posedge scl)
+  begin
+    if (addr_in < 2**N)
+      registros[addr_in] <= dato_in;
   end
-
-  always @(posedge clk) begin
-    if (send) begin
-      data_reg[addr_in] <= data_in;
-    end
-  end
-
+  
+//se asigna el valor del registro correspondiente a la salida datos_registros 
+  assign datos_registros = registros[addr_in];//Asigna la salida "datos_registros" como el valor almacenado en el registro seleccionado.
+  //La siguiente línea asigna un valor a la señal mosi basándose en las condiciones de los señales ss y miso,
+  //así como en el valor de la variable datos_registros.
+  //(condición) ? (valor si verdadero) : (valor si falso) y asigna
+  assign mosi = (ss) ? 8'b1 : (miso) ? 8'b0 : datos_registros;
 endmodule
-//MODULO REGISTRO DE DATOS
-module  data_logging(
-  input wire clk,
-  input wire reset,
-  input wire send,
-  input wire [7:0] addr_in,
-  input wire [7:0] data_in,
-  output reg [7:0] data_out,
-  output reg cs_ctrl,
-  output reg [7:0] n_tx_end,
-  output reg [7:0] n_rx_end,
-  output reg [7:0] data_log
+
+// Módulo Registro_de_Control
+module Registro_de_Control #(parameter N = 3)(
+  input wire clk,//Señal de reloj del sistema
+  input wire reset,//Señal de reinicio
+  input wire send,//Se utiliza como una señal de control para indicar que se desea enviar una transacción.
+  input wire cs_ctrl,//control de la señal CS (Chip Select).
+  input wire all_1s,//señal de todos unos.
+  input wire all_0s,//señal de todos ceros.
+  input wire [N-1:0] n_tx_end,//Número de transacciones completadas en la interfaz de transmisión
+  output wire [N-1:0] n_rx_end,//Número de transacciones completadas en la interfaz de recepción.
+  output reg [7:0] datos_registros,
+  output reg CS,//señal de Chip Select
+  input wire scl,//Señal de reloj del sistema
+  input wire ss,//Selección del esclavo
+  input wire miso,//se conecta como entrada al módulo Registro_de_Datos
+  output wire mosi//Señal de salida del maestro al esclavo (Master Out, Slave In).
+);
+  // Contador de transacciones
+  reg [N-1:0] transaction_count;
+
+  // Instancia del módulo Registro_de_Datos
+  Registro_de_Datos #(N) registro_datos_inst (
+    .reg_sel_i(1'b1),
+    .addr_in(n_tx_end),
+    .dato_in(mosi),
+    .datos_registros(datos_registros),
+    .scl(scl),
+    .ss(ss),
+    .miso(miso),
+    .mosi(mosi)
+  );
+
+  // Asignación de la señal CS según el valor de cs_ctrl
+  always @(cs_ctrl)
+    CS <= ~cs_ctrl;
+
+  // Lógica para contar transacciones
+  always @(posedge clk or posedge reset)
+  begin
+    if (reset)
+      transaction_count <= 0;
+    else if (send)
+      transaction_count <= transaction_count + 1;
+  end
+
+  // Asignación de n_rx_end
+  assign n_rx_end = transaction_count;
+endmodule
+
+// Módulo TOP
+module TOP #(parameter N = 3);
+  // Señales del TOP
+  wire clk, reset, send, cs_ctrl, all_1s, all_0s;
+  wire [N-1:0] n_tx_end, n_rx_end;
+  wire [7:0] datos_registros;
+  wire CS;
+  wire scl, ss, miso, mosi;
+
+  // Generador de reloj de 100 kHz
+  reg clk_100kHz;
+  always #(5) clk_100kHz = ~clk_100kHz;
+
+  // Instancia del módulo Registro_de_Control
+  Registro_de_Control #(N) registro_control_inst (
+    .clk(clk_100kHz),
+    .reset(reset),
+    .send(send),
+    .cs_ctrl(cs_ctrl),
+    .all_1s(all_1s),
+    .all_0s(all_0s),
+    .n_tx_end(n_tx_end),
+    .n_rx_end(n_rx_end),
+    .datos_registros(datos_registros),
+    .CS(CS),
+    .scl(scl),
+    .ss(ss),
+    .miso(miso),
+    .mosi(mosi)
 );
 
-  always @(posedge clk or posedge reset) begin
-    if (reset) begin
-      data_out <= 0;
-      cs_ctrl <= 0;
-      n_tx_end <= 0;
-      n_rx_end <= 0;
-      data_log <= 0;
-    end else begin
-      if (send) begin
-        data_out <= data_in[addr_in];
-        cs_ctrl <= 1;
-        n_tx_end <= n_tx_end + 1;
-      end else begin
-        cs_ctrl <= 0;
-      end
-      if (n_tx_end == 8) begin
-        n_tx_end <= 0;
-        data_log <= data_out;
-      end
-      if (n_rx_end == 8) begin
-        n_rx_end <= 0;
-      end
-    end
-  end
-
-endmodule
-//MODULO DE CONTROL Y GENERACION DE RELOJ 
-module spi_clock_generator (
-  input wire clk,
-  input wire reset,
-  output reg clk_out,
-  output reg [7:0] clk_div
+// Instancia del módulo Registro_de_Datos
+Registro_de_Datos #(N) registro_datos_inst (
+.reg_sel_i(1'b1),
+.addr_in(n_tx_end),
+.dato_in(datos_registros),
+.datos_registros(datos_registros),
+.scl(scl),
+.ss(ss),
+.miso(miso),
+.mosi(mosi)
 );
 
-  always @(posedge clk or posedge reset) begin
-    if (reset) begin
-      clk_out <= 0;
-      clk_div <= 0;
-    end else begin
-      if (clk_div == 8) begin
-        clk_out <= 1;
-        clk_div <= 0;
-      end else begin
-        clk_out <= 0;
-        clk_div <= clk_div + 1;
-      end
-    end
-  end
-
-endmodule
-//MODULO DE SEÑAL DE SELECCION DE ESCLAVO
-module spi_slave_select (
-  input wire clk,
-  input wire reset,
-  input wire [7:0] addr_in,
-  output reg slave_select
-);
-always @(posedge clk or posedge reset) begin
-    if (reset) begin
-       slave_select <= 0;
-   end else begin
-      if (addr_in == 0) begin
-          slave_select <= 1;
-      end else begin
-
-        slave_select <= 0;
-      end
-   end
-end
-endmodule
-//MODULO DE SEÑALES DE ENTRADA Y SALIDA DE DATOS
-module spi_data_io (
-  input wire clk,
-  input wire reset,
-  input wire [7:0] data_in,
-  output reg [7:0] data_out,
-  input wire slave_select,
-  input wire sck,
-  input wire miso,
-  output reg mosi
-);
-
-  always @(posedge clk or posedge reset) begin
-    if (reset) begin
-      data_out <= 0;
-      mosi <= 0;
-    end else begin
-      if (slave_select) begin
-        if (sck) begin
-          mosi <= data_in;
-        end else begin
-          data_out <= miso;
-        end
-      end
-    end
-  end
-
-endmodule
-//MODULO DE ALMACENAMIENTO EN BUFER DE DATOS
-module spi_data_buffer (
-  input wire clk,
-  input wire reset,
-  input wire [7:0] data_in,
-  output reg [7:0] data_out,
-  input wire slave_select,
-  input wire sck,
-  input wire miso,
-  output reg mosi
-);
-
-  reg [7:0] data_buffer;
-
-  always @(posedge clk or posedge reset) begin
-    if (reset) begin
-      data_buffer <= 0;
-    end else begin
-      if (slave_select) begin
-        if (sck) begin
-          data_buffer <= data_in;
-        end else begin
-          data_out <= data_buffer;
-        end
-      end
-    end
-  end
-
-endmodule
-//MODULO DE MANEJO Y DETECCION DE ERRORES
-module spi_error_detection (
-  input wire clk,
-  input wire reset,
-  input wire [7:0] data_in,
-  output reg [7:0] data_out,
-  input wire slave_select,
-  input wire sck,
-  input wire miso,
-  output reg mosi,
-  output reg error
-);
-
-  reg [7:0] data_buffer;
-  reg [7:0] expected_data;
-  reg [7:0] received_data;
-  reg error_flag;
-//El alwaysbloque se utiliza para implementar la máquina de estado.
-//El alwaysbloque se activa por un flanco ascendente o descendente de la señal del reloj.
-  always @(posedge clk or posedge reset) begin
-    if (reset) begin
-      data_buffer <= 0;
-      expected_data <= 0;
-      received_data <= 0;
-      error_flag <= 0;
-    end else begin
-      if (slave_select) begin
-        if (sck) begin
-          data_buffer <= data_in;
-        end else begin
-          received_data <= miso;
-          if (data_buffer != expected_data) begin
-            error_flag <= 1;
-          end
-        end
-      end
-    end
-  end
-
-  assign data_out = data_buffer;
-  assign mosi = (error_flag) ? 0 : data_in;
-  assign error = error_flag;
-
-endmodule
+// Aquí va el resto de la lógica del módulo TOP que sea necesaria
+// ...
+endmodule                        
